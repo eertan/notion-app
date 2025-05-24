@@ -1,12 +1,12 @@
 const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
-// const pool = require('../db'); // Will be used later for DB interactions
+const { query } = require('../db'); // Import the query function from db.js
 
 const router = express.Router();
 
-// In-memory store for tasks (for simulation)
-let tasks = [];
-let nextTaskId = 1; // Simple ID generation
+// In-memory store for tasks (for simulation) - REMOVED
+// let tasks = [];
+// let nextTaskId = 1;
 
 // Apply protect middleware to all routes in this file
 router.use(protect);
@@ -18,14 +18,13 @@ router.use(protect);
  */
 router.get('/', async (req, res) => {
   try {
-    // Simulate fetching tasks for the user from a database
-    // In a real app: const userTasks = await pool.query('SELECT * FROM tasks WHERE user_id = $1 ORDER BY updated_at DESC', [req.user.id]);
-    // res.json(userTasks.rows);
-    
-    const userTasks = tasks.filter(task => task.userId === req.user.id);
-    res.json(userTasks);
+    const userTasksResult = await query(
+      'SELECT * FROM tasks WHERE user_id = $1 ORDER BY updated_at DESC',
+      [req.user.id]
+    );
+    res.json(userTasksResult.rows);
   } catch (error) {
-    console.error('Error fetching tasks:', error);
+    console.error('Error fetching tasks:', error.stack);
     res.status(500).json({ message: 'Server error while fetching tasks' });
   }
 });
@@ -50,29 +49,17 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const now = new Date().toISOString();
-    const newTask = {
-      id: nextTaskId++,
-      userId,
-      title,
-      description,
-      dueDate,
-      completed: false,
-      createdAt: now,
-      updatedAt: now,
-    };
+    // dueDate is optional; handle null or valid date
+    const validDueDate = dueDate ? new Date(dueDate).toISOString().split('T')[0] : null;
 
-    // Simulate saving to database
-    // In a real app: const result = await pool.query(
-    //   'INSERT INTO tasks (user_id, title, description, due_date, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-    //   [userId, title, description, dueDate, now, now]
-    // );
-    // res.status(201).json(result.rows[0]);
-    
-    tasks.push(newTask);
-    res.status(201).json(newTask);
+    const insertTaskResult = await query(
+      'INSERT INTO tasks (user_id, title, description, due_date) VALUES ($1, $2, $3, $4) RETURNING *',
+      [userId, title, description, validDueDate]
+    );
+    // The RETURNING * clause will include created_at, updated_at, and completed (default false)
+    res.status(201).json(insertTaskResult.rows[0]);
   } catch (error) {
-    console.error('Error creating task:', error);
+    console.error('Error creating task:', error.stack);
     res.status(500).json({ message: 'Server error while creating task' });
   }
 });
@@ -97,55 +84,55 @@ router.put('/:id', async (req, res) => {
   }
   
   try {
-    // Simulate finding the task by ID
-    // In a real app: const taskResult = await pool.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
-    // if (taskResult.rows.length === 0) {
-    //   return res.status(404).json({ message: 'Task not found' });
-    // }
-    // const task = taskResult.rows[0];
-
-    const taskIndex = tasks.findIndex(t => t.id === taskId);
-    if (taskIndex === -1) {
-      return res.status(404).json({ message: 'Task not found (simulated)' });
+    // Fetch the task first to ensure it exists and belongs to the user
+    const taskCheckResult = await query('SELECT user_id FROM tasks WHERE id = $1', [taskId]);
+    if (taskCheckResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Task not found' });
     }
-
-    let task = tasks[taskIndex];
-
-    // Check if the task belongs to the user
-    if (task.userId !== userId) {
-      // In a real app, this check is crucial (SELECT * FROM tasks WHERE id = $1 AND user_id = $2)
+    if (taskCheckResult.rows[0].user_id !== userId) {
       return res.status(403).json({ message: 'User not authorized to update this task' });
     }
 
-    // Update fields
-    const updatedTitle = title !== undefined ? title : task.title;
-    const updatedDescription = description !== undefined ? description : task.description;
-    const updatedDueDate = dueDate !== undefined ? dueDate : task.dueDate;
-    const updatedCompleted = completed !== undefined ? completed : task.completed;
-    const updatedAt = new Date().toISOString();
+    // Dynamically build the update query
+    const updateFields = [];
+    const queryParams = [];
+    let paramIndex = 1;
 
-    // Simulate updating in database
-    // In a real app: const updateResult = await pool.query(
-    //   'UPDATE tasks SET title = $1, description = $2, due_date = $3, completed = $4, updated_at = $5 WHERE id = $6 AND user_id = $7 RETURNING *',
-    //   [updatedTitle, updatedDescription, updatedDueDate, updatedCompleted, updatedAt, taskId, userId]
-    // );
-    // if (updateResult.rows.length === 0) {
-    //   return res.status(404).json({ message: 'Task not found or user not authorized' });
-    // }
-    // res.json(updateResult.rows[0]);
+    if (title !== undefined) {
+      updateFields.push(`title = $${paramIndex++}`);
+      queryParams.push(title);
+    }
+    if (description !== undefined) {
+      updateFields.push(`description = $${paramIndex++}`);
+      queryParams.push(description);
+    }
+    if (dueDate !== undefined) { // Allow setting dueDate to null
+      const validDueDate = dueDate ? new Date(dueDate).toISOString().split('T')[0] : null;
+      updateFields.push(`due_date = $${paramIndex++}`);
+      queryParams.push(validDueDate);
+    }
+    if (completed !== undefined) {
+      updateFields.push(`completed = $${paramIndex++}`);
+      queryParams.push(completed);
+    }
+    
+    // Always update the updated_at timestamp
+    updateFields.push(`updated_at = NOW()`);
 
-    tasks[taskIndex] = { 
-      ...task, 
-      title: updatedTitle, 
-      description: updatedDescription, 
-      dueDate: updatedDueDate,
-      completed: updatedCompleted,
-      updatedAt 
-    };
-    res.json(tasks[taskIndex]);
+    queryParams.push(taskId);
+    queryParams.push(userId); // For the WHERE clause
+
+    const updateQueryText = `UPDATE tasks SET ${updateFields.join(', ')} WHERE id = $${paramIndex++} AND user_id = $${paramIndex++} RETURNING *`;
+    
+    const updateResult = await query(updateQueryText, queryParams);
+
+    if (updateResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Task not found or user not authorized during update' });
+    }
+    res.json(updateResult.rows[0]);
 
   } catch (error) {
-    console.error('Error updating task:', error);
+    console.error('Error updating task:', error.stack);
     res.status(500).json({ message: 'Server error while updating task' });
   }
 });
@@ -164,37 +151,27 @@ router.delete('/:id', async (req, res) => {
   }
 
   try {
-    // Simulate finding the task by ID
-    // In a real app: const taskResult = await pool.query('SELECT user_id FROM tasks WHERE id = $1', [taskId]);
-    // if (taskResult.rows.length === 0) {
-    //   return res.status(404).json({ message: 'Task not found' });
-    // }
-    // const taskOwner = taskResult.rows[0].user_id;
-
-    const taskIndex = tasks.findIndex(t => t.id === taskId);
-    if (taskIndex === -1) {
-      return res.status(404).json({ message: 'Task not found (simulated)' });
+    // Fetch the task first to ensure it exists and belongs to the user (optional but safer)
+    const taskCheckResult = await query('SELECT user_id FROM tasks WHERE id = $1', [taskId]);
+    if (taskCheckResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Task not found' });
     }
-
-    const task = tasks[taskIndex];
-
-    // Check if the task belongs to the user
-    if (task.userId !== userId) {
-       // In a real app: DELETE FROM tasks WHERE id = $1 AND user_id = $2
+    if (taskCheckResult.rows[0].user_id !== userId) {
       return res.status(403).json({ message: 'User not authorized to delete this task' });
     }
 
-    // Simulate deleting from database
-    // In a real app: const deleteResult = await pool.query('DELETE FROM tasks WHERE id = $1 AND user_id = $2 RETURNING id', [taskId, userId]);
-    // if (deleteResult.rowCount === 0) {
-    //   return res.status(404).json({ message: 'Task not found or user not authorized' });
-    // }
-    // res.status(204).send(); // No content for successful deletion
+    const deleteResult = await query(
+      'DELETE FROM tasks WHERE id = $1 AND user_id = $2 RETURNING id',
+      [taskId, userId]
+    );
 
-    tasks = tasks.filter(t => t.id !== taskId);
-    res.status(200).json({ message: 'Task deleted successfully (simulated)'}); // Or res.status(204).send();
+    if (deleteResult.rowCount === 0) {
+      return res.status(404).json({ message: 'Task not found or user not authorized during delete' });
+    }
+    // res.status(204).send(); // Standard for successful deletion
+    res.status(200).json({ message: 'Task deleted successfully' });
   } catch (error) {
-    console.error('Error deleting task:', error);
+    console.error('Error deleting task:', error.stack);
     res.status(500).json({ message: 'Server error while deleting task' });
   }
 });

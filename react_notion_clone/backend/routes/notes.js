@@ -1,12 +1,12 @@
 const express = require('express');
 const { protect } = require('../middleware/authMiddleware');
-// const pool = require('../db'); // Will be used later for DB interactions
+const { query } = require('../db'); // Import the query function from db.js
 
 const router = express.Router();
 
-// In-memory store for notes (for simulation)
-let notes = [];
-let nextNoteId = 1; // Simple ID generation
+// In-memory store for notes (for simulation) - REMOVED
+// let notes = [];
+// let nextNoteId = 1;
 
 // Apply protect middleware to all routes in this file
 router.use(protect);
@@ -18,14 +18,13 @@ router.use(protect);
  */
 router.get('/', async (req, res) => {
   try {
-    // Simulate fetching notes for the user from a database
-    // In a real app: const userNotes = await pool.query('SELECT * FROM notes WHERE user_id = $1 ORDER BY updated_at DESC', [req.user.id]);
-    // res.json(userNotes.rows);
-    
-    const userNotes = notes.filter(note => note.userId === req.user.id);
-    res.json(userNotes);
+    const userNotesResult = await query(
+      'SELECT * FROM notes WHERE user_id = $1 ORDER BY updated_at DESC',
+      [req.user.id]
+    );
+    res.json(userNotesResult.rows);
   } catch (error) {
-    console.error('Error fetching notes:', error);
+    console.error('Error fetching notes:', error.stack);
     res.status(500).json({ message: 'Server error while fetching notes' });
   }
 });
@@ -44,27 +43,14 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const now = new Date().toISOString();
-    const newNote = {
-      id: nextNoteId++,
-      userId,
-      title,
-      content,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    // Simulate saving to database
-    // In a real app: const result = await pool.query(
-    //   'INSERT INTO notes (user_id, title, content, created_at, updated_at) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-    //   [userId, title, content, now, now]
-    // );
-    // res.status(201).json(result.rows[0]);
-    
-    notes.push(newNote);
-    res.status(201).json(newNote);
+    const insertNoteResult = await query(
+      'INSERT INTO notes (user_id, title, content) VALUES ($1, $2, $3) RETURNING *',
+      [userId, title, content]
+    );
+    // The RETURNING * clause will include created_at and updated_at from DB defaults
+    res.status(201).json(insertNoteResult.rows[0]);
   } catch (error) {
-    console.error('Error creating note:', error);
+    console.error('Error creating note:', error.stack);
     res.status(500).json({ message: 'Server error while creating note' });
   }
 });
@@ -89,47 +75,47 @@ router.put('/:id', async (req, res) => {
   }
   
   try {
-    // Simulate finding the note by ID
-    // In a real app: const noteResult = await pool.query('SELECT * FROM notes WHERE id = $1', [noteId]);
-    // if (noteResult.rows.length === 0) {
-    //   return res.status(404).json({ message: 'Note not found' });
-    // }
-    // const note = noteResult.rows[0];
-
-    const noteIndex = notes.findIndex(n => n.id === noteId);
-    if (noteIndex === -1) {
-      return res.status(404).json({ message: 'Note not found (simulated)' });
+    // Fetch the note first to ensure it exists and belongs to the user
+    const noteCheckResult = await query('SELECT user_id FROM notes WHERE id = $1', [noteId]);
+    if (noteCheckResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Note not found' });
     }
-
-    let note = notes[noteIndex];
-
-    // Check if the note belongs to the user
-    if (note.userId !== userId) {
-      // In a real app, this check is crucial (SELECT * FROM notes WHERE id = $1 AND user_id = $2)
+    if (noteCheckResult.rows[0].user_id !== userId) {
       return res.status(403).json({ message: 'User not authorized to update this note' });
     }
 
-    // Update fields
-    const updatedTitle = title !== undefined ? title : note.title;
-    const updatedContent = content !== undefined ? content : note.content;
-    const updatedAt = new Date().toISOString();
+    // Dynamically build the update query based on provided fields
+    const updateFields = [];
+    const queryParams = [];
+    let paramIndex = 1;
 
-    // Simulate updating in database
-    // In a real app: const updateResult = await pool.query(
-    //   'UPDATE notes SET title = $1, content = $2, updated_at = $3 WHERE id = $4 AND user_id = $5 RETURNING *',
-    //   [updatedTitle, updatedContent, updatedAt, noteId, userId]
-    // );
-    // if (updateResult.rows.length === 0) {
-    //    // This case should ideally be caught by the initial check or a row count check after update
-    //   return res.status(404).json({ message: 'Note not found or user not authorized' });
-    // }
-    // res.json(updateResult.rows[0]);
+    if (title !== undefined) {
+      updateFields.push(`title = $${paramIndex++}`);
+      queryParams.push(title);
+    }
+    if (content !== undefined) {
+      updateFields.push(`content = $${paramIndex++}`);
+      queryParams.push(content);
+    }
 
-    notes[noteIndex] = { ...note, title: updatedTitle, content: updatedContent, updatedAt };
-    res.json(notes[noteIndex]);
+    // Always update the updated_at timestamp
+    updateFields.push(`updated_at = NOW()`);
+
+    queryParams.push(noteId);
+    queryParams.push(userId); // For the WHERE clause
+
+    const updateQuery = `UPDATE notes SET ${updateFields.join(', ')} WHERE id = $${paramIndex++} AND user_id = $${paramIndex++} RETURNING *`;
+    
+    const updateResult = await query(updateQuery, queryParams);
+
+    if (updateResult.rows.length === 0) {
+      // This should ideally be caught by the initial check, but as a safeguard
+      return res.status(404).json({ message: 'Note not found or user not authorized during update' });
+    }
+    res.json(updateResult.rows[0]);
 
   } catch (error) {
-    console.error('Error updating note:', error);
+    console.error('Error updating note:', error.stack);
     res.status(500).json({ message: 'Server error while updating note' });
   }
 });
@@ -148,38 +134,28 @@ router.delete('/:id', async (req, res) => {
   }
 
   try {
-    // Simulate finding the note by ID
-    // In a real app: const noteResult = await pool.query('SELECT user_id FROM notes WHERE id = $1', [noteId]);
-    // if (noteResult.rows.length === 0) {
-    //   return res.status(404).json({ message: 'Note not found' });
-    // }
-    // const noteOwner = noteResult.rows[0].user_id;
-
-    const noteIndex = notes.findIndex(n => n.id === noteId);
-    if (noteIndex === -1) {
-      return res.status(404).json({ message: 'Note not found (simulated)' });
+    // Fetch the note first to ensure it exists and belongs to the user (optional but safer)
+    const noteCheckResult = await query('SELECT user_id FROM notes WHERE id = $1', [noteId]);
+    if (noteCheckResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Note not found' });
     }
-
-    const note = notes[noteIndex];
-
-    // Check if the note belongs to the user
-    if (note.userId !== userId) {
-       // In a real app: DELETE FROM notes WHERE id = $1 AND user_id = $2
+    if (noteCheckResult.rows[0].user_id !== userId) {
       return res.status(403).json({ message: 'User not authorized to delete this note' });
     }
 
-    // Simulate deleting from database
-    // In a real app: const deleteResult = await pool.query('DELETE FROM notes WHERE id = $1 AND user_id = $2 RETURNING id', [noteId, userId]);
-    // if (deleteResult.rowCount === 0) {
-    //    // This case should ideally be caught by the initial check
-    //   return res.status(404).json({ message: 'Note not found or user not authorized' });
-    // }
-    // res.status(204).send();
+    const deleteResult = await query(
+      'DELETE FROM notes WHERE id = $1 AND user_id = $2 RETURNING id',
+      [noteId, userId]
+    );
 
-    notes = notes.filter(n => n.id !== noteId);
-    res.status(200).json({ message: 'Note deleted successfully (simulated)'}); // Or res.status(204).send();
+    if (deleteResult.rowCount === 0) {
+      // This case should ideally be caught by the initial checks
+      return res.status(404).json({ message: 'Note not found or user not authorized during delete' });
+    }
+    // res.status(204).send(); // Standard for successful deletion with no content
+    res.status(200).json({ message: 'Note deleted successfully' });
   } catch (error) {
-    console.error('Error deleting note:', error);
+    console.error('Error deleting note:', error.stack);
     res.status(500).json({ message: 'Server error while deleting note' });
   }
 });

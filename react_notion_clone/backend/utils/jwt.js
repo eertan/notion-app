@@ -1,7 +1,17 @@
 const jwt = require('jsonwebtoken');
-require('dotenv').config(); // To potentially use process.env.JWT_SECRET later
+require('dotenv').config(); // Ensures .env variables are loaded
 
-const JWT_SECRET = process.env.JWT_SECRET || 'YOUR_SECRET_KEY'; // Use environment variable or a placeholder
+// Fallback to a default secret if not set, but log a warning
+let jwtSecret = process.env.JWT_SECRET;
+if (!jwtSecret) {
+  console.warn(
+    'WARNING: JWT_SECRET environment variable is not set. Using a default insecure secret. ' +
+    'This is NOT recommended for production. Please set a strong secret in your .env file.'
+  );
+  jwtSecret = 'YOUR_DEFAULT_INSECURE_SECRET_KEY_CHANGE_ME';
+}
+
+const JWT_SECRET = jwtSecret;
 
 /**
  * Generates a JWT for a given user ID.

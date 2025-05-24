@@ -1,0 +1,9 @@
+/* Basic styles, can be expanded later */
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+/* Add other global styles or component-specific styles as needed */

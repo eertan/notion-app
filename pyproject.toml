@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "notion-app"
+version = "0.1.0"
+description = ""
+authors = ["eertan <erolertan4@gmail.com>"]
+readme = "README.md"
+packages = [{include = "notion_app"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+tk = "^0.1.0"
+streamlit = "^1.40.1"
+streamlit-calendar = "^1.2.0"
+streamlit-extras = "^0.5.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
